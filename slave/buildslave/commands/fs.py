@@ -137,7 +137,7 @@ class CopyDirectory(base.Command):
 
     def setup(self,args):
         self.logEnviron = args.get('logEnviron',True)
-        
+
     def start(self):
         args = self.args
         # args['todir'] is relative to Builder directory, and is required.
@@ -180,19 +180,52 @@ class CopyDirectory(base.Command):
             d.addCallbacks(self._sendRC, self._checkAbandoned)
         return d
 
-class StatFile(base.Command):
-
-    header = "stat"
-
+class FileCommandBase(base.Command):
     def start(self):
         args = self.args
-        # args['dir'] is relative to Builder directory, and is required.
         assert args['file'] is not None
         filename = os.path.join(self.builder.basedir, args['file'])
 
         try:
-            stat = os.stat(filename)
-            self.sendStatus({'stat': tuple(stat)})
+            result = self._doCommand(filename, args)
+            if result is not None:
+                self.sendStatus(result)
             self.sendStatus({'rc': 0})
         except:
             self.sendStatus({'rc': 1})
+
+    def _doCommand(self, filename, args):
+        raise NotImplementedError()
+
+class StatFile(FileCommandBase):
+
+    header = "stat"
+
+    def _doCommand(self, filename, args):
+        stat = os.stat(filename)
+        return {'stat': tuple(stat)}
+
+class RemoveFile(base.Command):
+
+    header = "rmfile"
+
+    def _doCommand(self, filename, args):
+        os.remove(filename)
+
+class WriteFile(base.Command):
+
+    header = 'writefile'
+
+    def _doCommand(self, filename, args):
+        assert args['text'] is not None
+        with open(filename, 'w') as fp:
+            fp.write(args['text'])
+
+class ReadFile(base.Command):
+
+    header = 'readfile'
+
+    def _doCommand(self, filename, args):
+        with open(filename, 'r') as fp:
+            text = fp.read()
+        return {'text': text}

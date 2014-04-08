@@ -65,7 +65,26 @@ class SetPropertiesFromEnv(SlaveBuildStep):
         self.step_status.setText(self.describe(done=True))
         self.finished(SUCCESS)
 
-class FileExists(SlaveBuildStep):
+class FileStepBase(SlaveBuildStep):
+    """
+    Base class for file operation steps.
+    """
+    renderables = [ 'file' ]
+
+    haltOnFailure = True
+    flunkOnFailure = True
+
+    def __init__(self, file, **kwargs):
+        buildstep.BuildStep.__init__(self, **kwargs)
+        self.file = file
+
+    def _checkSlaveCommand(self, name):
+        slave_ver = self.slaveVersion(name)
+        if not slave_ver:
+            raise BuildSlaveTooOldError("slave is too old, does not know "
+                                        "about '%s'" % name)
+
+class FileExists(FileStepBase):
     """
     Check for the existence of a file on the slave.
     """
@@ -73,22 +92,9 @@ class FileExists(SlaveBuildStep):
     description='Checking'
     descriptionDone='Checked'
 
-    renderables = [ 'file' ]
-
-    haltOnFailure = True
-    flunkOnFailure = True
-
-
-    def __init__(self, file, **kwargs):
-        buildstep.BuildStep.__init__(self, **kwargs)
-        self.file = file
-
     def start(self):
-        slavever = self.slaveVersion('stat')
-        if not slavever:
-            raise BuildSlaveTooOldError("slave is too old, does not know "
-                                        "about stat")
-        cmd = buildstep.RemoteCommand('stat', {'file': self.file })
+        self._checkSlaveCommand('stat')
+        cmd = buildstep.RemoteCommand('stat', {'file': self.file})
         d = self.runCommand(cmd)
         d.addCallback(lambda res: self.commandComplete(cmd))
         d.addErrback(self.failed)
@@ -105,6 +111,56 @@ class FileExists(SlaveBuildStep):
         else:
             self.step_status.setText(["Not a file."])
             self.finished(FAILURE)
+
+class RemoveFile(FileStepBase):
+    """
+    Remove a file on the slave.
+    """
+    name = 'RemoveFile'
+    description = 'Removing'
+    descriptionDone = 'Removed'
+
+    def start(self):
+        self._checkSlaveCommand('rmfile')
+        cmd = buildstep.RemoteCommand('rmfile', {'file': self.file})
+        d = self.runCommand(cmd)
+        d.addCallback(lambda res: self.commandComplete(cmd))
+        d.addErrback(self.failed)
+
+    def commandComplete(self, cmd):
+        if cmd.didFail():
+            self.step_status.setText(["Delete failed."])
+            self.finished(FAILURE)
+            return
+        self.step_status.setText(self.describe(done=True))
+        self.finished(SUCCESS)
+
+class WriteFile(FileStepBase):
+    """
+    Write text to a file on the slave.
+    """
+    name = 'WriteFile'
+    description = 'Writing'
+    descriptionDone = 'Written'
+
+    def __init__(self, file, text, **kwargs):
+        FileStepBase.__init__(self, file, **kwargs)
+        self.text = text
+
+    def start(self):
+        self._checkSlaveCommand('writefile')
+        cmd = buildstep.RemoteCommand('writefile', {'file': self.file, 'text': self.text})
+        d = self.runCommand(cmd)
+        d.addCallback(lambda res: self.commandComplete(cmd))
+        d.addErrback(self.failed)
+
+    def commandComplete(self, cmd):
+        if cmd.didFail():
+            self.step_status.setText(["Writing failed."])
+            self.finished(FAILURE)
+            return
+        self.step_status.setText(self.describe(done=True))
+        self.finished(SUCCESS)
 
 class CopyDirectory(SlaveBuildStep):
     """
