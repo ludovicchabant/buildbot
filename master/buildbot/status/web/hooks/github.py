@@ -14,8 +14,9 @@
 # Copyright Buildbot Team Members
 
 import re
-from twisted.python import log
+
 from dateutil.parser import parse as dateparse
+from twisted.python import log
 
 try:
     import json
@@ -45,7 +46,7 @@ def getChanges(request, options=None):
     return (changes, 'git')
 
 
-def process_change(payload, user, repo, repo_url, project):
+def process_change(payload, user, repo, repo_url, project, codebase=None):
     """
     Consumes the JSON as a python object and actually starts the build.
 
@@ -68,6 +69,13 @@ def process_change(payload, user, repo, repo_url, project):
             log.msg("Branch `%s' deleted, ignoring" % branch)
         else:
             for commit in payload['commits']:
+                if 'distinct' in commit and not commit['distinct']:
+                    log.msg(
+                        'Commit `%s` is a non-distinct commit, ignoring...' % (
+                            commit['id'])
+                    )
+                    continue
+
                 files = []
                 if 'added' in commit:
                     files.extend(commit['added'])
@@ -78,7 +86,8 @@ def process_change(payload, user, repo, repo_url, project):
                 when_timestamp = dateparse(commit['timestamp'])
 
                 log.msg("New revision: %s" % commit['id'][:8])
-                changes.append({
+
+                change = {
                     'author': '%s <%s>' % (
                         commit['author']['name'], commit['author']['email']
                     ),
@@ -90,6 +99,11 @@ def process_change(payload, user, repo, repo_url, project):
                     'revlink': commit['url'],
                     'repository': repo_url,
                     'project': project
-                })
+                }
+
+                if codebase is not None:
+                    change['codebase'] = codebase
+
+                changes.append(change)
 
     return changes

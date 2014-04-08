@@ -145,6 +145,8 @@ also return a Deferred::
         d.addCallback(pick)
         return d
 
+The ``nextBuild`` function is passed as parameter to :class:`BuilderConfig`.
+
 .. _Customizing-SVNPoller:
 
 Customizing SVNPoller
@@ -510,6 +512,11 @@ repos and workdir, this will work.
 
 Writing New BuildSteps
 ----------------------
+
+.. warning::
+
+    Buildbot is transitioning to a new, simpler style for writing custom steps.
+    See :doc:`new-style-steps` for details.
 
 While it is a good idea to keep your build process self-contained in the source code tree, sometimes it is convenient to put more intelligence into your Buildbot configuration.
 One way to do this is to write a custom :class:`BuildStep`.
@@ -906,6 +913,91 @@ Of course if the build is run under a PTY, then stdout and stderr will
 be merged before the buildbot ever sees them, so such interleaving
 will be unavoidable.
 
+Discovering files
+~~~~~~~~~~~~~~~~~
+
+When implementing a :class:`BuildStep` it may be necessary to know about files
+that are created during the build.  There are a few slave commands that can be
+used to find files on the slave and test for the existence (and type) of files
+and directories.
+
+The slave provides the following file-discovery related commands:
+
+* `stat` calls :func:`os.stat` for a file in the slave's build directory. This
+  can be used to check if a known file exists and whether it is a regular file,
+  directory or symbolic link.
+
+* `listdir` calls :func:`os.listdir` for a directory on the slave. It can be
+  used to obtain a list of files that are present in a directory on the slave.
+
+* `glob` calls :func:`glob.glob` on the slave, with a given shell-style pattern
+  containing wildcards.
+
+For example, we could use stat to check if a given path exists and contains
+``*.pyc`` files. If the path does not exist (or anything fails) we mark the step
+as failed; if the path exists but is not a directory, we mark the step as having
+"warnings".
+
+.. code-block:: python
+
+    from buildbot.process import buildstep
+    from buildbot.interfaces import BuildSlaveToOldError
+    from buildbot.status.results import SUCCESS, WARNINGS, FAILURE
+    import stat
+
+    class MyBuildStep(buildstep.BuildStep):
+
+        def __init__(self, dirname, **kwargs):
+            buildstep.BuildStep.__init__(self, **kwargs)
+            self.dirname = dirname
+
+        def start(self):
+            # make sure the slave knows about stat
+            slavever = (self.slaveVersion('stat'),
+                        self.slaveVersion('glob'))
+            if not all(slavever):
+                raise BuildSlaveToOldError('need stat and glob')
+
+            cmd = buildstep.RemoteCommand('stat', {'file': self.dirname})
+
+            d = self.runCommand(cmd)
+            d.addCallback(lambda res: self.evaluateStat(cmd))
+            d.addErrback(self.failed)
+            return d
+
+        def evaluateStat(self, cmd):
+            if cmd.didFail():
+                self.step_status.setText(["File not found."])
+                self.finished(FAILURE)
+                return
+            s = cmd.updates["stat"][-1]
+            if not stat.S_ISDIR(s[stat.ST_MODE]):
+                self.step_status.setText(["'tis not a directory"])
+                self.finished(WARNINGS)
+                return
+
+            cmd = buildstep.RemoteCommand('glob', {'glob': self.dirname + '/*.pyc'})
+
+            d = self.runCommand(cmd)
+            d.addCallback(lambda res: self.evaluateGlob(cmd))
+            d.addErrback(self.failed)
+            return d
+
+        def evaluateGlob(self, cmd):
+            if cmd.didFail():
+                self.step_status.setText(["Glob failed."])
+                self.finished(FAILURE)
+                return
+            files = cmd.updates["files"][-1]
+            if len(files):
+                self.step_status.setText(["Found pycs"]+files)
+            else:
+                self.step_status.setText(["No pycs found"])
+            self.finished(SUCCESS)
+
+
+For more information on the available commands, see :doc:`../developer/master-slave`.
+
 .. todo::
 
     Step Progress
@@ -963,8 +1055,11 @@ deploy it?
 
 You have a couple of different options.
 
-Option 1: The simplest technique is to simply put this text
-(everything from START to FINISH) in your :FILE:`master.cfg` file, somewhere
+Inclusion in the :file:`master.cfg` file
+########################################
+
+The simplest technique is to simply put the step class definitions
+in your :file:`master.cfg` file, somewhere
 before the :class:`BuildFactory` definition where you actually use it in a
 clause like::
 
@@ -987,12 +1082,15 @@ class will get redefined, which means that the buildmaster will think
 that you've reconfigured all the Builders that use it, even though
 nothing changed. Bleh.
 
-Option 2: Instead, we can put this code in a separate file, and import
+python file somewhere on the system
+###################################
+
+Instead, we can put this code in a separate file, and import
 it into the master.cfg file just like we would the normal buildsteps
 like :bb:step:`ShellCommand` and :bb:step:`SVN`.
 
-Create a directory named ~/lib/python, put everything from START to
-FINISH in :file:`~/lib/python/framboozle.py`, and run your buildmaster using:
+Create a directory named :file:`~/lib/python`, put the step class definitions
+in :file:`~/lib/python/framboozle.py`, and run your buildmaster using:
 
 .. code-block:: bash
 
@@ -1020,8 +1118,8 @@ or::
     f.addStep(SVN(svnurl="stuff"))
     f.addStep(framboozle.Framboozle())
 
-(check out the Python docs for details about how "import" and "from A
-import B" work).
+(check out the Python docs for details about how ``import`` and ``from A
+import B`` work).
 
 What we've done here is to tell Python that every time it handles an
 "import" statement for some named module, it should look in our
@@ -1040,7 +1138,8 @@ to start your buildmaster in a slightly weird way, or you have to
 modify your environment to set the :envvar:`PYTHONPATH` variable.
 
 
-Option 3: Install this code into a standard Python library directory
+Install this code into a standard Python library directory
+##########################################################
 
 Find out what your Python's standard include path is by asking it:
 
@@ -1074,11 +1173,14 @@ the decidedly non-standard :file:`~/lib/python`), we don't even have to set
 to be root to write to one of those standard include directories.
 
 
-Option 4: Submit the code for inclusion in the Buildbot distribution
+Submit the code for inclusion in the Buildbot distribution
+##########################################################
 
-Make a fork of buildbot on http://github.com/djmitche/buildbot or post a patch
+Make a fork of buildbot on http://github.com/buildbot/buildbot or post a patch
 in a bug at http://buildbot.net.  In either case, post a note about your patch
 to the mailing list, so others can provide feedback and, eventually, commit it.
+
+::
 
     from buildbot.steps import framboozle
     f = BuildFactory()

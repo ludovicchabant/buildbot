@@ -210,6 +210,10 @@ The following selectors are supported.
 ``kw``
     The key refers to a keyword argument passed to ``Interpolate``.
 
+``slave``
+    The key to the per-buildslave "info" dictionary (e.g., the "Slave information" properties shown
+    in the buildslave web page for each buildslave)
+
 The following ways of interpreting the value are available.
 
 ``-replacement``
@@ -269,6 +273,7 @@ While Interpolate can handle many simple cases, and even some common conditional
 The ``renderer`` decorator creates a renderable object that will be replaced with the result of the function, called when the step it's passed to begins.
 The function receives an :class:`~buildbot.interfaces.IProperties` object, which it can use to examine the values of any and all properties.  For example::
 
+    from buildbot.process import properties
     @properties.renderer
     def makeCommand(props):
         command = [ 'make' ]
@@ -394,13 +399,13 @@ or, more practically, ::
         implements(IRenderable)
         def getRenderingFor(self, props):
             return time.clock()
-    ShellCommand(command=['make', Interpolate('TIME=%(kw:now)', now=Now())])
+    ShellCommand(command=['make', Interpolate('TIME=%(kw:now)s', now=Now())])
 
 This is equivalent to::
 
     @renderer
     def now(props):
         return time.clock()
-    ShellCommand(command=['make', Interpolate('TIME=%(kw:now)', now=now)])
+    ShellCommand(command=['make', Interpolate('TIME=%(kw:now)s', now=now)])
 
 Note that a custom renderable must be instantiated (and its constructor can take whatever arguments you'd like), whereas a function decorated with :func:`renderer` can be used directly.

@@ -16,6 +16,7 @@
 import calendar
 
 import buildbot.status.web.change_hook as change_hook
+
 from buildbot.test.fake.web import FakeRequest
 from buildbot.test.util import compat
 
@@ -24,7 +25,7 @@ from twisted.trial import unittest
 # Sample Gitorious commit payload
 # source: http://gitorious.org/gitorious/pages/WebHooks
 
-gitJsonPayload = """
+gitJsonPayload = r"""
 {
   "after": "df5744f7bc8663b39717f87742dc94f52ccbf4dd",
   "before": "b4ca2d38e756695133cbd0e03d078804e1dc6610",
@@ -62,6 +63,7 @@ gitJsonPayload = """
 
 
 class TestChangeHookConfiguredWithGitChange(unittest.TestCase):
+
     def setUp(self):
         dialects = {'gitorious': True}
         self.changeHook = change_hook.ChangeHookResource(dialects=dialects)

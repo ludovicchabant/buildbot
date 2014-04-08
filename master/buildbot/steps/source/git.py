@@ -13,52 +13,56 @@
 #
 # Copyright Buildbot Team Members
 
-from twisted.python import log
-from twisted.internet import defer, reactor
 from distutils.version import LooseVersion
+from twisted.internet import defer
+from twisted.internet import reactor
+from twisted.python import log
 
 from buildbot import config as bbconfig
+from buildbot.interfaces import BuildSlaveTooOldError
 from buildbot.process import buildstep
 from buildbot.steps.source.base import Source
-from buildbot.interfaces import BuildSlaveTooOldError
+
 
 def isTrueOrIsExactlyZero(v):
     # nonzero values are true...
     if v:
         return True
-    
+
     # ... and True for the number zero, but we have to
     # explicitly guard against v==False, since
     # isinstance(False, int) is surprisingly True
     if isinstance(v, int) and v is not False:
         return True
-    
+
     # all other false-ish values are false
     return False
 
 git_describe_flags = [
     # on or off
-    ('all',         lambda v: ['--all'] if v else None),
-    ('always',      lambda v: ['--always'] if v else None),
-    ('contains',    lambda v: ['--contains'] if v else None),
-    ('debug',       lambda v: ['--debug'] if v else None),
-    ('long',        lambda v: ['--long'] if v else None),
+    ('all', lambda v: ['--all'] if v else None),
+    ('always', lambda v: ['--always'] if v else None),
+    ('contains', lambda v: ['--contains'] if v else None),
+    ('debug', lambda v: ['--debug'] if v else None),
+    ('long', lambda v: ['--long'] if v else None),
     ('exact-match', lambda v: ['--exact-match'] if v else None),
-    ('tags',        lambda v: ['--tags'] if v else None),
+    ('tags', lambda v: ['--tags'] if v else None),
     # string parameter
-    ('match',       lambda v: ['--match', v] if v else None),
+    ('match', lambda v: ['--match', v] if v else None),
     # numeric parameter
-    ('abbrev',      lambda v: ['--abbrev=%s' % v] if isTrueOrIsExactlyZero(v) else None),
-    ('candidates',  lambda v: ['--candidates=%s' % v] if isTrueOrIsExactlyZero(v) else None),
+    ('abbrev', lambda v: ['--abbrev=%s' % v] if isTrueOrIsExactlyZero(v) else None),
+    ('candidates', lambda v: ['--candidates=%s' % v] if isTrueOrIsExactlyZero(v) else None),
     # optional string parameter
-    ('dirty',       lambda v: ['--dirty'] if (v is True or v=='') else None),
-    ('dirty',       lambda v: ['--dirty=%s' % v] if (v and v is not True) else None),
+    ('dirty', lambda v: ['--dirty'] if (v is True or v == '') else None),
+    ('dirty', lambda v: ['--dirty=%s' % v] if (v and v is not True) else None),
 ]
 
+
 class Git(Source):
+
     """ Class for Git with all the smarts """
-    name='git'
-    renderables = [ "repourl", "reference"]
+    name = 'git'
+    renderables = ["repourl", "reference", "branch", "codebase"]
 
     def __init__(self, repourl=None, branch='HEAD', mode='incremental', method=None,
                  reference=None, submodules=False, shallow=False, progress=False, retryFetch=False,
@@ -96,7 +100,7 @@ class Git(Source):
 
         @type  retryFetch: boolean
         @param retryFetch: Retry fetching before failing source checkout.
-        
+
         @type  getDescription: boolean or dict
         @param getDescription: Use 'git describe' to describe the fetched revision
 
@@ -106,20 +110,21 @@ class Git(Source):
         if not getDescription and not isinstance(getDescription, dict):
             getDescription = False
 
-        self.branch    = branch
-        self.method    = method
-        self.prog  = progress
-        self.repourl   = repourl
+        self.branch = branch
+        self.method = method
+        self.prog = progress
+        self.repourl = repourl
         self.reference = reference
         self.retryFetch = retryFetch
         self.submodules = submodules
-        self.shallow   = shallow
+        self.shallow = shallow
         self.fetchcount = 0
         self.clobberOnFailure = clobberOnFailure
         self.mode = mode
         self.getDescription = getDescription
         self.config = config
         self.supportsBranch = True
+        self.srcdir = 'source'
         Source.__init__(self, **kwargs)
 
         if self.mode not in ['incremental', 'full']:
@@ -141,6 +146,7 @@ class Git(Source):
         self.stdio_log = self.addLogForRemoteCommands("stdio")
 
         d = self.checkBranchSupport()
+
         def checkInstall(gitInstalled):
             if not gitInstalled:
                 raise BuildSlaveTooOldError("git is not installed on slave")
@@ -148,9 +154,10 @@ class Git(Source):
         d.addCallback(checkInstall)
 
         d.addCallback(lambda _: self.sourcedirIsPatched())
+
         def checkPatched(patched):
             if patched:
-                return self._dovccmd(['clean', '-f', '-d', '-x'])
+                return self._dovccmd(['clean', '-f', '-f', '-d', '-x'])
             else:
                 return 0
         d.addCallback(checkPatched)
@@ -176,8 +183,11 @@ class Git(Source):
             yield self.copy()
             return
 
-        updatable = yield self._sourcedirIsUpdatable()
-        if not updatable:
+        action = yield self._sourcedirIsUpdatable()
+        if action == "clobber":
+            yield self.clobber()
+            return
+        elif action == "clone":
             log.msg("No git repo present, making full clone")
             yield self._fullCloneOrFallback()
         elif self.method == 'clean':
@@ -189,17 +199,20 @@ class Git(Source):
 
     @defer.inlineCallbacks
     def incremental(self):
-        updatable = yield self._sourcedirIsUpdatable()
-
+        action = yield self._sourcedirIsUpdatable()
         # if not updateable, do a full checkout
-        if not updatable:
+        if action == "clobber":
+            yield self.clobber()
+            return
+        elif action == "clone":
+            log.msg("No git repo present, making full clone")
             yield self._fullCloneOrFallback()
             return
 
         # test for existence of the revision; rc=1 indicates it does not exist
         if self.revision:
             rc = yield self._dovccmd(['cat-file', '-e', self.revision],
-                    abandonOnFailure=False)
+                                     abandonOnFailure=False)
         else:
             rc = 1
 
@@ -210,54 +223,63 @@ class Git(Source):
 
             if self.branch != 'HEAD':
                 yield self._dovccmd(['branch', '-M', self.branch],
-                        abandonOnFailure=False)
+                                    abandonOnFailure=False)
         else:
-            yield self._fetchOrFallback(None)
+            yield self._fetchOrFallback()
 
         yield self._updateSubmodule(None)
 
     def clean(self):
-        command = ['clean', '-f', '-d']
+        command = ['clean', '-f', '-f', '-d']
         d = self._dovccmd(command)
         d.addCallback(self._fetchOrFallback)
         d.addCallback(self._updateSubmodule)
         d.addCallback(self._cleanSubmodule)
         return d
 
+    @defer.inlineCallbacks
     def clobber(self):
-        d = self._doClobber()
-        d.addCallback(lambda _: self._fullClone(shallowClone=self.shallow))
-        return d
+        yield self._doClobber()
+        res = yield self._fullClone(shallowClone=self.shallow)
+        if res != 0:
+            raise buildstep.BuildStepFailed
 
+    @defer.inlineCallbacks
     def fresh(self):
-        command = ['clean', '-f', '-d', '-x']
-        d = self._dovccmd(command)
-        d.addCallback(self._fetchOrFallback)
-        d.addCallback(self._updateSubmodule)
-        d.addCallback(self._cleanSubmodule)
-        return d
+        res = yield self._dovccmd(['clean', '-f', '-f', '-d', '-x'],
+                                  abandonOnFailure=False)
+        if res == 0:
+            yield self._fetchOrFallback()
+        else:
+            yield self._doClobber()
+            yield self._fullCloneOrFallback()
+        yield self._updateSubmodule()
+        yield self._cleanSubmodule()
 
     def copy(self):
         cmd = buildstep.RemoteCommand('rmdir', {'dir': self.workdir,
                                                 'logEnviron': self.logEnviron,
-                                                'timeout': self.timeout,})
+                                                'timeout': self.timeout, })
         cmd.useLog(self.stdio_log, False)
         d = self.runCommand(cmd)
 
-        self.workdir = 'source'
+        old_workdir = self.workdir
+        self.workdir = self.srcdir
         d.addCallback(lambda _: self.incremental())
+
         def copy(_):
             cmd = buildstep.RemoteCommand('cpdir',
-                                          {'fromdir': 'source',
-                                           'todir':'build',
+                                          {'fromdir': self.srcdir,
+                                           'todir': old_workdir,
                                            'logEnviron': self.logEnviron,
-                                           'timeout': self.timeout,})
+                                           'timeout': self.timeout, })
             cmd.useLog(self.stdio_log, False)
             d = self.runCommand(cmd)
             return d
         d.addCallback(copy)
+
         def resetWorkdir(_):
-            self.workdir = 'build'
+            self.workdir = old_workdir
             return 0
 
         d.addCallback(resetWorkdir)
@@ -265,13 +287,14 @@ class Git(Source):
 
     def finish(self, res):
         d = defer.succeed(res)
+
         def _gotResults(results):
             self.setStatus(self.cmd, results)
-            log.msg("Closing log, sending result of the command %s " % \
-                        (self.cmd))
+            log.msg("Closing log, sending result of the command %s " %
+                    (self.cmd))
             return results
         d.addCallback(_gotResults)
-        d.addCallbacks(self.finished, self.checkDisconnect)
+        d.addCallback(self.finished)
         return d
 
     @defer.inlineCallbacks
@@ -282,31 +305,31 @@ class Git(Source):
             raise buildstep.BuildStepFailed()
         log.msg("Got Git revision %s" % (revision, ))
         self.updateSourceProperty('got_revision', revision)
-    
+
         defer.returnValue(0)
 
     @defer.inlineCallbacks
     def parseCommitDescription(self, _=None):
-        if self.getDescription==False: # dict() should not return here
+        if self.getDescription == False:  # dict() should not return here
             defer.returnValue(0)
             return
-        
+
         cmd = ['describe']
         if isinstance(self.getDescription, dict):
             for opt, arg in git_describe_flags:
                 opt = self.getDescription.get(opt, None)
                 arg = arg(opt)
                 if arg:
-                    cmd.extend(arg)            
+                    cmd.extend(arg)
         cmd.append('HEAD')
-        
+
         try:
             stdout = yield self._dovccmd(cmd, collectStdout=True)
             desc = stdout.strip()
             self.updateSourceProperty('commit-description', desc)
         except:
             pass
-            
+
         defer.returnValue(0)
 
     def _dovccmd(self, command, abandonOnFailure=True, collectStdout=False, initialStdin=None):
@@ -325,6 +348,7 @@ class Git(Source):
                                            initialStdin=initialStdin)
         cmd.useLog(self.stdio_log, False)
         d = self.runCommand(cmd)
+
         def evaluateCommand(cmd):
             if abandonOnFailure and cmd.didFail():
                 log.msg("Source step failed while running command %s" % cmd)
@@ -346,6 +370,7 @@ class Git(Source):
             command.append('--progress')
 
         d = self._dovccmd(command)
+
         def checkout(_):
             if self.revision:
                 rev = self.revision
@@ -355,6 +380,7 @@ class Git(Source):
             abandonOnFailure = not self.retryFetch and not self.clobberOnFailure
             return self._dovccmd(command, abandonOnFailure)
         d.addCallback(checkout)
+
         def renameBranch(res):
             if res != 0:
                 return res
@@ -368,7 +394,7 @@ class Git(Source):
         return d
 
     @defer.inlineCallbacks
-    def _fetchOrFallback(self, _):
+    def _fetchOrFallback(self, _=None):
         """
         Handles fallbacks for failure of fetch,
         wrapper for self._fetch
@@ -384,13 +410,19 @@ class Git(Source):
         else:
             raise buildstep.BuildStepFailed()
 
-
     def _clone(self, shallowClone):
         """Retry if clone failed"""
 
         args = []
+        switchToBranch = False
         if self.supportsBranch and self.branch != 'HEAD':
-            args += ['--branch', self.branch]
+            if self.branch.startswith('refs/'):
+                # we can't choose this branch from 'git clone' directly; we
+                # must do so after the clone
+                switchToBranch = True
+                args += ['--no-checkout']
+            else:
+                args += ['--branch', self.branch]
         if shallowClone:
             args += ['--depth', '1']
         if self.reference:
@@ -405,14 +437,18 @@ class Git(Source):
             abandonOnFailure = True
         # If it's a shallow clone abort build step
         d = self._dovccmd(command, abandonOnFailure=(abandonOnFailure and shallowClone))
+
+        if switchToBranch:
+            d.addCallback(lambda _: self._fetch(None))
+
         def _retry(res):
-            if self.stopped or res == 0: # or shallow clone??
+            if self.stopped or res == 0:  # or shallow clone??
                 return res
             delay, repeats = self.retry
             if repeats > 0:
-                log.msg("Checkout failed, trying %d more times after %d seconds" 
-                    % (repeats, delay))
-                self.retry = (delay, repeats-1)
+                log.msg("Checkout failed, trying %d more times after %d seconds"
+                        % (repeats, delay))
+                self.retry = (delay, repeats - 1)
                 df = defer.Deferred()
                 df.addCallback(lambda _: self._doClobber())
                 df.addCallback(lambda _: self._clone(shallowClone))
@@ -424,23 +460,29 @@ class Git(Source):
             d.addCallback(_retry)
         return d
 
+    @defer.inlineCallbacks
     def _fullClone(self, shallowClone=False):
         """Perform full clone and checkout to the revision if specified
            In the case of shallow clones if any of the step fail abort whole build step.
         """
-        d = self._clone(shallowClone)
+        res = yield self._clone(shallowClone)
+        if res != 0:
+            defer.returnValue(res)
+            return
+
         # If revision specified checkout that revision
         if self.revision:
-            d.addCallback(lambda _: self._dovccmd(['reset', '--hard',
-                                                   self.revision, '--'],
-                                                   shallowClone))
+            res = yield self._dovccmd(['reset', '--hard',
+                                       self.revision, '--'],
+                                      shallowClone)
         # init and update submodules, recurisively. If there's not recursion
         # it will not do it.
         if self.submodules:
-            d.addCallback(lambda _: self._dovccmd(['submodule', 'update',
-                                                   '--init', '--recursive'],
-                                                  shallowClone))
-        return d
+            res = yield self._dovccmd(['submodule', 'update',
+                                       '--init', '--recursive'],
+                                      shallowClone)
+
+        defer.returnValue(res)
 
     def _fullCloneOrFallback(self):
         """Wrapper for _fullClone(). In the case of failure, if clobberOnFailure
@@ -448,6 +490,7 @@ class Git(Source):
         """
 
         d = self._fullClone()
+
         def clobber(res):
             if res != 0:
                 if self.clobberOnFailure:
@@ -463,9 +506,10 @@ class Git(Source):
         """Remove the work directory"""
         cmd = buildstep.RemoteCommand('rmdir', {'dir': self.workdir,
                                                 'logEnviron': self.logEnviron,
-                                                'timeout': self.timeout,})
+                                                'timeout': self.timeout, })
         cmd.useLog(self.stdio_log, False)
         d = self.runCommand(cmd)
+
         def checkRemoval(res):
             if res != 0:
                 raise RuntimeError("Failed to delete directory")
@@ -478,18 +522,16 @@ class Git(Source):
             return None
         return changes[-1].revision
 
-    def _sourcedirIsUpdatable(self):
-        return self.pathExists(self.build.path_module.join(self.workdir, '.git'))
-
-    def _updateSubmodule(self, _):
+    def _updateSubmodule(self, _=None):
         if self.submodules:
-            return self._dovccmd(['submodule', 'update', '--recursive'])
+            return self._dovccmd(['submodule', 'update',
+                                  '--init', '--recursive'])
         else:
             return defer.succeed(0)
 
-    def _cleanSubmodule(self, _):
+    def _cleanSubmodule(self, _=None):
         if self.submodules:
-            command = ['submodule', 'foreach', 'git', 'clean', '-f', '-d']
+            command = ['submodule', 'foreach', 'git', 'clean', '-f', '-f', '-d']
             if self.mode == 'full' and self.method == 'fresh':
                 command.append('-x')
             return self._dovccmd(command)
@@ -506,6 +548,7 @@ class Git(Source):
 
     def checkBranchSupport(self):
         d = self._dovccmd(['--version'], collectStdout=True)
+
         def checkSupport(stdout):
             gitInstalled = False
             if 'git' in stdout:
@@ -515,4 +558,39 @@ class Git(Source):
                 self.supportsBranch = False
             return gitInstalled
         d.addCallback(checkSupport)
+        return d
+
+    def applyPatch(self, patch):
+        d = self._dovccmd(['apply', '--index', '-p', str(patch[0])],
+                          initialStdin=patch[1])
+        return d
+
+    def _sourcedirIsUpdatable(self):
+        if self.slaveVersionIsOlderThan('listdir', '2.17'):
+            d = self.pathExists(self.build.path_module.join(self.workdir, '.git'))
+
+            def checkWithPathExists(exists):
+                if(exists):
+                    return "update"
+                else:
+                    return "clone"
+
+            d.addCallback(checkWithPathExists)
+        else:
+            cmd = buildstep.RemoteCommand('listdir',
+                                          {'dir': self.workdir,
+                                           'logEnviron': self.logEnviron,
+                                           'timeout': self.timeout, })
+            cmd.useLog(self.stdio_log, False)
+            d = self.runCommand(cmd)
+
+            def checkWithListdir(_):
+                files = cmd.updates['files'][0]
+                if '.git' in files:
+                    return "update"
+                elif len(files) > 0:
+                    return "clobber"
+                else:
+                    return "clone"
+            d.addCallback(checkWithListdir)
         return d

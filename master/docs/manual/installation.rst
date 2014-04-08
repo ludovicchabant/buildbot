@@ -36,8 +36,9 @@ Python: http://www.python.org
 
 Twisted: http://twistedmatrix.com
 
-  Buildbot requires Twisted-9.0.0 or later on the master, and Twisted-8.1.0 on
-  the slave. As always, the most recent version is recommended.
+  Buildbot requires Twisted-11.0.0 or later on the master, and Twisted-8.1.0 on the slave.
+  In upcoming versions of Buildbot, a newer Twisted will also be required on the slave.
+  As always, the most recent version is recommended.
 
   In some cases, Twisted is delivered as a collection of subpackages. You'll
   need at least "Twisted" (the core package), and you'll also want
@@ -654,6 +655,7 @@ command line, like this
     around. The default is 10.
 
 .. option:: --allow-shutdown
+
     Can also be passed directly to the BuildSlave constructor in buildbot.tac.  If
     set, it allows the buildslave to initiate a graceful shutdown, meaning that it
     will ask the master to shut down the slave when the current build, if any, is

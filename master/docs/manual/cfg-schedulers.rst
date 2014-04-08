@@ -109,6 +109,12 @@ available with all schedulers.
 ``reason``
     A string that will be used as the reason for the triggered build.
 
+``createAbsoluteSourceStamps``
+    This option only has effect when using multiple codebases. When ``True``, it
+    uses the last seen revision for each codebase that does not have a change.
+    When ``False``, the default value, codebases without changes will use the
+    revision from the ``codebases`` argument.
+
 The remaining subsections represent a catalog of the available Scheduler types.
 All these Schedulers are defined in modules under :mod:`buildbot.schedulers`,
 and the docstrings there are the best source of documentation on the arguments
@@ -234,6 +240,8 @@ The arguments to this scheduler are:
 ``onlyImportant``
 
 ``reason``
+
+``createAbsoluteSourceStamps``
     See :ref:`Configuring-Schedulers`.
 
 ``treeStableTimer``
@@ -264,12 +272,6 @@ The arguments to this scheduler are:
 
     .. note:: ``None`` is a keyword, not a string, so write ``None``
        and not ``"None"``.
-
-``createAbsoluteSourceStamps``
-    This option only has effect when using multiple codebases. When ``True``, it
-    uses the last seen revision for each codebase that does not have a change.
-    When ``False``, the default value, codebases without changes will use the
-    revision from the ``codebases`` argument.
 
 
 Example::
@@ -482,9 +484,11 @@ The full list of parameters is:
 ``reason``
 
 ``codebases``
-    See :ref:`Configuring-Schedulers`.  Note that ``fileIsImportant`` and
-    ``change_filter`` are only relevant if ``onlyIfChanged`` is
-    ``True``.
+
+``createAbsoluteSourceStamps``
+    See :ref:`Configuring-Schedulers`.  Note that ``fileIsImportant``,
+    ``change_filter`` and ``createAbsoluteSourceStamps`` are only relevant
+    if ``onlyIfChanged`` is ``True``.
 
 ``onlyIfChanged``
     If this is true, then builds will not be scheduled at the designated time
@@ -893,6 +897,11 @@ The scheduler takes the following parameters:
     property.  These can be arbitrary parameters, where the parameter's name is
     taken as the property name, or ``AnyPropertyParameter``, which allows the
     web user to specify the property name.
+
+``buttonName``
+
+    The name of the "submit" button on the resulting force-build form.
+    This defaults to "Force Build".
 
 An example may be better than long explanation.  What you need in your config
 file is something like::
